@@ -82,7 +82,8 @@ int16_t buf_output[AUDIO_DMA_BUF_SIZE];
 int16_t *buf_input_half = buf_input + AUDIO_DMA_BUF_SIZE / 2;
 int16_t *buf_output_half = buf_output + AUDIO_DMA_BUF_SIZE / 2;
 
-
+int16_t delayBuffer[DELAY_BUFFER_SIZE];
+int delayIndex = 0;
 
 // ------------- scratch float buffer for long delays, reverbs or long impulse response FIR based on float implementations ---------
 
@@ -274,11 +275,40 @@ static void writeInt16ToSDRAM(int16_t val, int pos) {
  * (keep in mind that this number represents interleaved L and R samples,
  * hence the true corresponding duration of this audio frame is AUDIO_BUF_SIZE/2 divided by the sampling frequency).
  */
+
+static void applyDelay(int16_t *in, int16_t *out, int delayTime, float feedback, float wetMix, float dryMix) {
+    for (int n = 0; n < AUDIO_BUF_SIZE; n += 2) {
+        // Pour le canal gauche (échantillons pairs)
+        int delayedSampleIndexL = (delayIndex - delayTime * 2 + DELAY_BUFFER_SIZE) % DELAY_BUFFER_SIZE;
+        int16_t delayedSampleL = readInt16FromSDRAM(delayedSampleIndexL);
+        int16_t newSampleL = in[n] + (delayedSampleL * feedback);
+        out[n] = (int16_t)(in[n] * dryMix + delayedSampleL * wetMix);
+
+        writeInt16ToSDRAM(newSampleL, delayIndex); // Stocker l'échantillon actuel pour le retard
+
+        // Pour le canal droit (échantillons impairs)
+        int delayedSampleIndexR = (delayIndex - delayTime * 2 + 1 + DELAY_BUFFER_SIZE) % DELAY_BUFFER_SIZE;
+        int16_t delayedSampleR = readInt16FromSDRAM(delayedSampleIndexR);
+        int16_t newSampleR = in[n+1] + (delayedSampleR * feedback);
+        out[n+1] = (int16_t)(in[n+1] * dryMix + delayedSampleR * wetMix);
+
+        writeInt16ToSDRAM(newSampleR, delayIndex + 1); // Stocker l'échantillon actuel pour le retard
+
+        // Mise à jour de delayIndex pour la prochaine itération
+        delayIndex = (delayIndex + 2) % DELAY_BUFFER_SIZE; // +2 car nous traitons des échantillons stéréo
+    }
+}
+
+
+
+
 static void processAudio(int16_t *out, int16_t *in) {
 
 	LED_On(); // for oscilloscope measurements...
 
-	for (int n = 0; n < AUDIO_BUF_SIZE; n++) out[n] = in[n];
+	// for (int n = 0; n < AUDIO_BUF_SIZE; n++) out[n] = in[n];
+
+	applyDelay(in, out, 20000,0.5,0.1,0.1);
 
 	LED_Off();
 }
