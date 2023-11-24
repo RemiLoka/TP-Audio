@@ -12,16 +12,19 @@ for n = 1:length(seuil)
     [voixSeuil(n,:), valueRemove(n,:)] = NaiveRealisation(voix,seuil(n));
 end
 
-sound(voixSeuil(3,:))
+% sound(voixSeuil(3,:))
 
 % Réaliation avancée
 
 [y, filtre] = AdvanceRealisation(voix, 0.01);
 
+N = length(y);
+sample = 1:N;
+
 figure
-subplot(311)
-plot(voix)
-subplot(312)
+subplot(211)
+plot(sample,voix,'b', sample,y,'r');
+subplot(212)
 plot(filtre)
-subplot(313)
-plot(y)
+
+sound(y, Fs)
