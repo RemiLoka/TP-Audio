@@ -1,4 +1,4 @@
-function [y, filtre] = AdvanceRealisation(voix, seuil, size_filter, rising, size_hold)
+function [y, filtre, energie_voix] = AdvanceRealisation(voix, seuil, size_filter, rising, size_hold)
 
 num_samples = length(voix);
 energie_voix = voix.*voix;
