@@ -1,13 +1,13 @@
-function [y, filtre, moy] = AdvanceRealisation(voix, seuil)
+function [y, filtre] = AdvanceRealisation(voix, seuil, size_filter, rising, size_hold)
 
 num_samples = length(voix);
 energie_voix = voix.*voix;
 y = zeros(num_samples,1);
 filtre = zeros(1,num_samples);
+seuil = seuil*seuil;
 
 % Filtre
-size_filter = 500;
-slope = 1/1000;
+slope = 1/rising;
 
 state = 1;
 hold = 0;
@@ -36,7 +36,7 @@ for n = size_filter+1:num_samples
         if filtre(n) <= 0.5
             hold = hold + 1;
             filtre(n) = 0.5;
-            if hold == 500
+            if hold == size_hold
                 state = 5;
             end
         else

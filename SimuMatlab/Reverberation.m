@@ -1,6 +1,6 @@
 clear all;
 
-[voix, Fs] = audioread('/Users/remi/Desktop/TP-Audio/SimuMatlab/DataAudio/Voix1.wav');
+[voix, Fs] = audioread('/Users/remi/Desktop/TP-Audio/SimuMatlab/DataAudio/s1.wav');
 
 % Naive Realisation
 
@@ -16,7 +16,14 @@ end
 
 % Réaliation avancée
 
-[y, filtre] = AdvanceRealisation(voix, 0.01);
+seuil = 0.05;
+window_size = 1000;
+slope = 500;
+hold = 1000;
+
+%voix = voix(1:30000);
+
+[y, filtre] = AdvanceRealisation(voix, seuil, window_size, slope, hold);
 
 N = length(y);
 sample = 1:N;
