@@ -1,0 +1,1 @@
+function [y, filtre, energie_voix] = Compression(voix, seuil, size_filter)
