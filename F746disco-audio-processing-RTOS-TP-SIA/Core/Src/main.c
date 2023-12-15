@@ -53,6 +53,7 @@
 #include "bsp/disco_sai.h"
 #include "stdio.h"
 #include <audio.h>
+#include <ui.h>
 
 /* USER CODE END Includes */
 
@@ -113,6 +114,14 @@ SDRAM_HandleTypeDef hsdram1;
 
 osThreadId defaultTaskHandle;
 osThreadId uiTaskHandle;
+extern double inputLevelR_cp;
+extern double inputLevelL_cp;
+
+#define FFT_Length 256
+extern float aFFT_Input_f32[FFT_Length];
+
+
+
 /* USER CODE BEGIN PV */
 
 // see disco_lcd.h: if the LCD framebuffer is in RAM as opposed to SDRAM
@@ -228,12 +237,12 @@ int main(void)
 	TS_Init();
 	printf("Touchscreen Init: OK\n");
 
-	SCB_EnableICache(); // comment out if in step debugging to avoid weird behaviours
-	SCB_EnableDCache();
+	// SCB_EnableICache(); // comment out if in step debugging to avoid weird behaviours
+	// SCB_EnableDCache();
 	printf("Cache enabled\n");
 
 	//test();
-	audioLoop(); // comment to use RTOS (see below)
+	 //audioLoop(); // comment to use RTOS (see below)
 
   /* USER CODE END 2 */
 
@@ -1705,63 +1714,104 @@ void Error(char* msg)
  * @param  argument: Not used
  * @retval None
  */
+
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+
+/**
+
+* @brief  Function implementing the defaultTask thread.
+
+* @param  argument: Not used
+
+* @retval None
+
+*/
+
 /* USER CODE END Header_StartDefaultTask */
+
 void StartDefaultTask(void const * argument)
+
 {
-  /* init code for USB_HOST */
-  MX_USB_HOST_Init();
-  /* USER CODE BEGIN 5 */
+       /* init code for USB_HOST */
+       MX_USB_HOST_Init();
+       /* USER CODE BEGIN 5 */
+       //uiDisplayBasic();  // NS
+       printf("StartDefaultTask\n");
+       audioLoop();
+       //uint32_t PreviousWakeTime = osKernelSysTick();
+       /* Infinite loop */
+       //char thread[20];
+       //char valeur[10];
+       //int i=0;
+       for(;;)
+       {
+             //osDelay(1000);
+             //osDelayUntil (&PreviousWakeTime, 500);
+             //strcpy(thread, "thread alive : ");            // NS
+             //sprintf(valeur, "%d", i++);
+             //strcat(thread, valeur);
+             //LCD_DrawString(10, 70, (uint8_t*) thread, LEFT_MODE, true);
+             //printf("thread alive : %d\n", i++);
+             //printf("waiting for signal...\n");
+             //osSignalWait (0x0001, osWaitForever);
+       }
 
-	printf("StartDefaultTask\n");
 
-	//uint32_t PreviousWakeTime = osKernelSysTick();
-	/* Infinite loop */
-	int i=0;
-	for(;;)
-	{
-		//osDelay(1000);
-		//osDelayUntil (&PreviousWakeTime, 500);
-		printf("thread alive : %d\n", i++);
-		printf("waiting for signal...\n");
-		osSignalWait (0x0001, osWaitForever);
-	}
 
-	// In case we accidentally exit from task loop
-	osThreadTerminate(NULL);
+       // In case we accidentally exit from task loop
 
-  /* USER CODE END 5 */
+       osThreadTerminate(NULL);
+       /* USER CODE END 5 */
 }
 
 /* USER CODE BEGIN Header_startUITask */
+
 /**
- * @brief Function implementing the uiTask thread.
- * @param argument: Not used
- * @retval None
- */
+
+* @brief Function implementing the uiTask thread.
+
+* @param argument: Not used
+
+* @retval None
+*/
 /* USER CODE END Header_startUITask */
+
 void startUITask(void const * argument)
 {
-  /* USER CODE BEGIN startUITask */
+       /* USER CODE BEGIN startUITask */
+       osDelay(200);
+       //LCD_DrawString(10, 90, (uint8_t*) "StartLedTask", LEFT_MODE, true);    // NS
+       printf("StartLedTask\n");
+       uiDisplayBasic();
+       int x = 40;
+       int y1 = 80;
+       int time = 0;
 
-	osDelay(200);
-	printf("StartLedTask\n");
+       // PB_GetState() = GPIO_PIN_SET ou GPIO_PIN_RESET
+       /* Infinite loop */
+       for(;;)
+       {
+    	   osSignalWait(0x0003, osWaitForever);
+    	   uiDisplayInputLevel(inputLevelL_cp,inputLevelR_cp);
 
-	// PB_GetState() = GPIO_PIN_SET ou GPIO_PIN_RESET
-
-	/* Infinite loop */
-	for(;;)
-	{
-		osDelay(900);
-		LED_Toggle();
-		if (PB_GetState() == GPIO_PIN_SET ) osSignalSet(defaultTaskHandle, 0x0001);
-	}
-
-	// In case we accidentally exit from task loop
-	osThreadTerminate(NULL);
-
-  /* USER CODE END startUITask */
+    		for(int y = FFT_Length/2 + y1; y > y1; y--){
+    				LCD_DrawPixel_Color(x + time, y, aFFT_Input_f32[(FFT_Length/2 + y1) - y]);
+    			}
+    			if(time < 400){
+    				time += 1;
+    			}
+    			else{
+    				time = 0;
+    			}
+             //osDelay(1000);
+             //LED_Toggle();
+             //if (PB_GetState() == GPIO_PIN_SET ) osSignalSet(defaultTaskHandle, 0x0001);
+       }
+       // In case we accidentally exit from task loop
+       osThreadTerminate(NULL);
+       /* USER CODE END startUITask */
 }
-
  /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM6 interrupt took place, inside

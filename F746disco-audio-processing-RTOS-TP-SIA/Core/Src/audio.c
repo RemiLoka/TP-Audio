@@ -49,7 +49,9 @@
 #include <ui.h>
 #include <stdio.h>
 #include "string.h"
-#include "math.h"
+#include <math.h>
+#include "cmsis_os.h"
+#include "arm_math.h"
 #include "bsp/disco_sai.h"
 #include "bsp/disco_base.h"
 
@@ -58,6 +60,8 @@ extern SAI_HandleTypeDef hsai_BlockB2;
 extern DMA_HandleTypeDef hdma_sai2_a;
 extern DMA_HandleTypeDef hdma_sai2_b;
 
+extern osThreadId defaultTaskHandle;
+extern osThreadId uiTaskHandle;
 
 // ---------- communication b/w DMA IRQ Handlers and the audio loop -------------
 
@@ -72,9 +76,19 @@ uint32_t audio_rec_buffer_state;
 // ---------- DMA buffers ------------
 
 // whole sample count in an audio frame: (beware: as they are interleaved stereo samples, true audio frame duration is given by AUDIO_BUF_SIZE/2)
-#define AUDIO_BUF_SIZE   ((uint32_t)512)
+#define AUDIO_BUF_SIZE   ((uint32_t)256)
 /* size of a full DMA buffer made up of two half-buffers (aka double-buffering) */
 #define AUDIO_DMA_BUF_SIZE   (2 * AUDIO_BUF_SIZE)
+
+#define FFT_Length (AUDIO_BUF_SIZE / 2)
+
+#define DELAY_BUFFER_SIZE 44100 // Pour un delay d'une seconde à 44.1kHz
+
+#define WINDOW_SIZE 500
+
+float sampleSum = 0.0f;
+float absValue = 0.0f;
+
 
 // DMA buffers are in embedded RAM:
 int16_t buf_input[AUDIO_DMA_BUF_SIZE];
@@ -90,6 +104,10 @@ int delayIndex = 0;
 uint32_t scratch_offset = 0; // see doc in processAudio()
 #define AUDIO_SCRATCH_SIZE   AUDIO_SCRATCH_MAXSZ_WORDS
 
+//FFT
+arm_rfft_fast_instance_f32 FFT_struct;
+float32_t aFFT_Output_f32[FFT_Length];
+float32_t aFFT_Input_f32[FFT_Length];
 
 
 // ------------ Private Function Prototypes ------------
@@ -98,12 +116,20 @@ static void processAudio(int16_t*, int16_t*);
 static void accumulateInputLevels();
 static float readFloatFromSDRAM(int pos);
 static void writeFloatToSDRAM(float val, int pos);
+static void applyDelay(int16_t *in, int16_t *out, int delayTime, float feedback, float wetMix, float dryMix);
+static void attenuation (int16_t *in, int16_t *out, float seuil_dB, float attenuation_dB);
+
+void initializeNoiseGate(NoiseGate *gate, float threshold, float attenuation, float attackTimeMs, float releaseTimeMs, float holdTimeMs, int sampleRate);
+void processNoiseGate(NoiseGate *gate, int16_t *in, int16_t *out);
+
 
 // ----------- Local vars ------------
 
 static int count = 0; // debug
-static double inputLevelL = 0;
-static double inputLevelR = 0;
+double inputLevelL = 0;
+double inputLevelR = 0;
+double inputLevelL_cp = 0;
+double inputLevelR_cp = 0;
 
 // ----------- Functions ------------
 
@@ -113,14 +139,18 @@ static double inputLevelR = 0;
  * - processing audio samples and writing them to buf_output[]
  * - transferring processed samples back to the DMA buffer
  */
+
+
 void audioLoop() {
 
-	uiDisplayBasic();
+	//uiDisplayBasic();
+
+	arm_rfft_fast_init_f32(&FFT_struct, FFT_Length);
 
 	/* Initialize SDRAM buffers */
 	memset((int16_t*) AUDIO_SCRATCH_ADDR, 0, AUDIO_SCRATCH_SIZE * 2); // note that the size argument here always refers to bytes whatever the data type
 
-	audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+	//audio_rec_buffer_state = BUFFER_OFFSET_NONE;
 
 	// start SAI (audio) DMA transfers:
 	startAudioDMA(buf_output, buf_input, AUDIO_DMA_BUF_SIZE);
@@ -135,29 +165,54 @@ void audioLoop() {
 			count = 0;
 			inputLevelL *= 0.05;
 			inputLevelR *= 0.05;
-			uiDisplayInputLevel(inputLevelL, inputLevelR);
+
+			inputLevelL_cp = inputLevelL;
+			inputLevelR_cp = inputLevelR;
+
+			//uiDisplayInputLevel(inputLevelL, inputLevelR);
 			inputLevelL = 0.;
 			inputLevelR = 0.;
 		}
+		osSignalWait(0x0001, osWaitForever);
+		processAudio(buf_output, buf_input);
+		calculateFFT(buf_output);
+
+		// Permet d'attendre que la seconde trame DMA soit complètement rempli avant de procéder au process audio
+		osSignalWait(0x0002, osWaitForever);
+		processAudio(buf_output_half, buf_input_half);
+		calculateFFT(buf_output_half);
 
 		/* Wait until first half block has been recorded */
-		while (audio_rec_buffer_state != BUFFER_OFFSET_HALF) {
-			asm("NOP");
-		}
-		audio_rec_buffer_state = BUFFER_OFFSET_NONE;
-		/* Copy recorded 1st half block */
-		processAudio(buf_output, buf_input);
+		//while (audio_rec_buffer_state != BUFFER_OFFSET_HALF) {
+			//asm("NOP");
+		//}
+		//audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+		/*copy recorded 1st half block*/
+		//processAudio(buf_output, buf_input);
 
-		/* Wait until second half block has been recorded */
-		while (audio_rec_buffer_state != BUFFER_OFFSET_FULL) {
-			asm("NOP");
-		}
-		audio_rec_buffer_state = BUFFER_OFFSET_NONE;
+		/*Wait until second half block has been recorded */
+		//while (audio_rec_buffer_state != BUFFER_OFFSET_FULL) {
+			//asm("NOP");
+		//}
+		//audio_rec_buffer_state = BUFFER_OFFSET_NONE;
 		/* Copy recorded 2nd half block */
-		processAudio(buf_output_half, buf_input_half);
+		//processAudio(buf_output_half, buf_input_half);
 
 	}
 }
+
+void calculateFFT(int16_t *in){
+
+	 for (int i = 0; i < FFT_Length; i++){
+		 aFFT_Input_f32[i] = in[i];
+	 }
+
+	 arm_rfft_fast_f32(&FFT_struct, aFFT_Input_f32, aFFT_Output_f32, 0);
+	 arm_cmplx_mag_f32(aFFT_Output_f32, aFFT_Input_f32, FFT_Length/2);
+	 osSignalSet(uiTaskHandle, 0x0003);
+ }
+
+
 
 
 /*
@@ -198,7 +253,8 @@ static void accumulateInputLevels() {
  * Audio IN DMA Transfer complete interrupt.
  */
 void HAL_SAI_RxCpltCallback(SAI_HandleTypeDef *hsai) {
-	audio_rec_buffer_state = BUFFER_OFFSET_FULL;
+	osSignalSet(defaultTaskHandle, 0x0001);
+	//audio_rec_buffer_state = BUFFER_OFFSET_FULL;
 	return;
 }
 
@@ -206,7 +262,8 @@ void HAL_SAI_RxCpltCallback(SAI_HandleTypeDef *hsai) {
  * Audio IN DMA Half Transfer complete interrupt.
  */
 void HAL_SAI_RxHalfCpltCallback(SAI_HandleTypeDef *hsai) {
-	audio_rec_buffer_state = BUFFER_OFFSET_HALF;
+	osSignalSet(defaultTaskHandle, 0x0002);
+	//audio_rec_buffer_state = BUFFER_OFFSET_HALF;
 	return;
 }
 
@@ -274,7 +331,11 @@ static void writeInt16ToSDRAM(int16_t val, int pos) {
  * have just been transferred from the CODEC
  * (keep in mind that this number represents interleaved L and R samples,
  * hence the true corresponding duration of this audio frame is AUDIO_BUF_SIZE/2 divided by the sampling frequency).
+ *
+ *
  */
+
+
 
 static void applyDelay(int16_t *in, int16_t *out, int delayTime, float feedback, float wetMix, float dryMix) {
     for (int n = 0; n < AUDIO_BUF_SIZE; n += 2) {
@@ -299,18 +360,118 @@ static void applyDelay(int16_t *in, int16_t *out, int delayTime, float feedback,
     }
 }
 
+static void attenuation (int16_t *in, int16_t *out, float seuil_dB, float attenuation_dB) {
+
+    float attenuation_factor = powf(10.0f, attenuation_dB / 20.0f);
+
+    float seuil = powf(10.0f, seuil_dB / 20.0f);
+
+    for (int n = 0; n < AUDIO_BUF_SIZE; n++) {
+
+        if (fabs(in[n]) > seuil) {
+            out[n] = (int16_t)(in[n] / attenuation_factor);
+        } else {
+            out[n] = in[n];
+        }
+    }
+}
+
+void initializeNoiseGate(NoiseGate *gate, float threshold, float attenuation, float attackTimeMs, float releaseTimeMs, float holdTimeMs, int sampleRate) {
+	gate->threshold = threshold;
+	gate->attenuation = powf(10.0f, attenuation / 20.0f);  // Conversion de dB en facteur linéaire
+	gate->attackTime = (int)(attackTimeMs * sampleRate / 1000.0f);
+	gate->releaseTime = (int)(releaseTimeMs * sampleRate / 1000.0f);
+	gate->holdTime = (int)(holdTimeMs * sampleRate / 1000.0f);
+	gate->sampleRate = sampleRate;
+	gate->counter = 0;
+	gate->state = GATE_CLOSED;
+}
+
+
+void processNoiseGate(NoiseGate *gate, int16_t *in, int16_t *out) {
+    float energySum = 0.0f;
+    float energyThreshold = gate->threshold * gate->threshold; // Threshold based on energy
+
+    for (int n = 0; n < AUDIO_BUF_SIZE; n++) {
+        // Calculate the energy of the current sample
+        float currentEnergy = (float)in[n] * (float)in[n];
+        energySum += currentEnergy;
+
+        // Calculate the average energy over the window size
+        if (n >= WINDOW_SIZE) {
+            float avgEnergy = energySum / WINDOW_SIZE;
+            energySum -= (float)in[n - WINDOW_SIZE] * (float)in[n - WINDOW_SIZE]; // Remove oldest energy
+
+            switch (gate->state) {
+                case GATE_CLOSED:
+                    if (avgEnergy > energyThreshold) {
+                        gate->state = GATE_OPENING;
+                        gate->counter = gate->attackTime;
+                    }
+                    out[n] = (int16_t)(in[n] * gate->attenuation);
+                    break;
+
+                case GATE_OPENING:
+                    if (gate->counter > 0) {
+                        float linearGain = 1.0f - ((float)gate->counter / gate->attackTime) * (1.0f - gate->attenuation);
+                        out[n] = (int16_t)(in[n] * linearGain);
+                        gate->counter--;
+                    } else {
+                        gate->state = GATE_OPEN;
+                        gate->counter = gate->holdTime;
+                        out[n] = in[n];
+                    }
+                    break;
+
+                case GATE_OPEN:
+                    if (avgEnergy < energyThreshold) {
+                        if (gate->counter > 0) {
+                            gate->counter--;
+                        } else {
+                            gate->state = GATE_CLOSING;
+                            gate->counter = gate->releaseTime;
+                        }
+                    }
+                    out[n] = in[n];
+                    break;
+
+                case GATE_CLOSING:
+                    if (gate->counter > 0) {
+                        float linearGain = gate->attenuation + ((float)gate->counter / gate->releaseTime) * (1.0f - gate->attenuation);
+                        out[n] = (int16_t)(in[n] * linearGain);
+                        gate->counter--;
+                    } else {
+                        gate->state = GATE_CLOSED;
+                        out[n] = (int16_t)(in[n] * gate->attenuation);
+                    }
+                    break;
+            }
+        } else {
+            // Default processing for first few samples
+            out[n] = in[n];
+        }
+    }
+}
 
 
 
 static void processAudio(int16_t *out, int16_t *in) {
 
-	LED_On(); // for oscilloscope measurements...
+    LED_On(); // for oscilloscope measurements...
 
-	// for (int n = 0; n < AUDIO_BUF_SIZE; n++) out[n] = in[n];
+    //for (int n = 0; n < AUDIO_BUF_SIZE; n++) out[n] = in[n] ;  //entrée==>sortie
 
-	applyDelay(in, out, 20000,0.5,0.1,0.1);
+    //applyDelay(in, out, 20000,0.5,0.1,0.1); //Le Delay
 
-	LED_Off();
+    //attenuation(in,out,300,-100);  // Atténuation naive
+
+    NoiseGate myNoiseGate;
+    initializeNoiseGate(&myNoiseGate, -80.0f, -120.0f, 10.0f, 10.0f, 250.0f, 44100);
+    processNoiseGate(&myNoiseGate, in, out); // noisegate
+
+    LED_Off();
 }
+
+
 
 
