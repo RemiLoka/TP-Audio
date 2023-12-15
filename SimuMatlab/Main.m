@@ -106,3 +106,21 @@ sound(y, Fs)
 
 %% Compression
 
+y_0_2 = Compression(voix, 0, 2);
+y_0_4 = Compression(voix, 0, 4);
+y_02_2 = Compression(voix, 0.2, 2);
+y_06_2 = Compression(voix, 0.5, 2);
+
+figure
+subplot(221)
+plot(axis_naive, voix, 'b', axis_naive, y_0_2, 'r')
+title('thresold = 0 et reduction du gain à de 2')
+subplot(222)
+plot(axis_naive, voix, 'b', axis_naive, y_0_4, 'r')
+title('thresold = 0 et reduction du gain à de 4')
+subplot(223)
+plot(axis_naive, voix, 'b', axis_naive, y_02_2, 'r')
+title('thresold = 0.2 et reduction du gain à de 2')
+subplot(224)
+plot(axis_naive, voix, 'b', axis_naive, y_06_2, 'r')
+title('thresold = 0.5 et reduction du gain à de 2')
